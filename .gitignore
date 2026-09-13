@@ -1,0 +1,6 @@
+node_modules/
+.env
+parqueadero.db
+parqueadero.db-shm
+parqueadero.db-wal
+*.log
