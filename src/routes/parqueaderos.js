@@ -7,6 +7,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const { errorConEstado } = require("../utils/errores");
 const { TIPOS_DEFAULT, MAX_TIPOS_TOTAL } = require("../utils/tiposDefault");
 const { generarCodigoSede } = require("../utils/codigo");
+const { tieneAccesoASede } = require("../utils/accesoSedes");
 
 const router = express.Router();
 router.use(requiereAuth, validarLicencia);
@@ -79,7 +80,7 @@ router.get("/", requiereAuth, (req, res) => {
 });
 
 router.patch("/:id/config", requiereRol("admin"), asyncHandler(async (req, res) => {
-  const { monto_recargo_whatsapp, monto_recargo_sms, webhook_pluma_url, tolerancia_vencimiento_horas, moneda, monto_multa_perdida_ticket } = req.body;
+  const { monto_recargo_whatsapp, monto_recargo_sms, webhook_pluma_url, tolerancia_vencimiento_horas, moneda, monto_multa_perdida_ticket, capacidad_maxima } = req.body;
   db.prepare(`
     UPDATE parqueaderos
     SET monto_recargo_whatsapp = COALESCE(?, monto_recargo_whatsapp),
@@ -87,7 +88,8 @@ router.patch("/:id/config", requiereRol("admin"), asyncHandler(async (req, res) 
         webhook_pluma_url = COALESCE(?, webhook_pluma_url),
         tolerancia_vencimiento_horas = COALESCE(?, tolerancia_vencimiento_horas),
         moneda = COALESCE(?, moneda),
-        monto_multa_perdida_ticket = COALESCE(?, monto_multa_perdida_ticket)
+        monto_multa_perdida_ticket = COALESCE(?, monto_multa_perdida_ticket),
+        capacidad_maxima = COALESCE(?, capacidad_maxima)
     WHERE id = ? AND negocio_id = ?
   `).run(
     monto_recargo_whatsapp ?? null,
@@ -96,10 +98,28 @@ router.patch("/:id/config", requiereRol("admin"), asyncHandler(async (req, res) 
     tolerancia_vencimiento_horas ?? null,
     moneda ?? null,
     monto_multa_perdida_ticket ?? null,
+    capacidad_maxima ?? null,
     req.params.id,
     req.negocio.id
   );
   res.json({ ok: true });
+}));
+
+// Ocupacion en tiempo real de una sede: total de puestos configurados,
+// cuantos estan ocupados ahora mismo (registros activos) y cuantos quedan
+// disponibles. Si la sede no tiene "capacidad_maxima" configurada, total y
+// disponibles vienen null (no se puede calcular disponibilidad sin ese dato).
+router.get("/:id/ocupacion", requiereAuth, asyncHandler(async (req, res) => {
+  if (!tieneAccesoASede(req.usuario, req.params.id)) {
+    throw errorConEstado(403, "No tienes acceso a esta sede");
+  }
+  const sede = db.prepare("SELECT capacidad_maxima FROM parqueaderos WHERE id = ? AND activo = 1").get(req.params.id);
+  if (!sede) throw errorConEstado(404, "Sede no encontrada");
+
+  const ocupados = db.prepare("SELECT COUNT(*) AS n FROM registros WHERE parqueadero_id = ? AND estado = 'activo'").get(req.params.id).n;
+  const total = sede.capacidad_maxima ?? null;
+  const disponibles = total != null ? Math.max(total - ocupados, 0) : null;
+  res.json({ total, ocupados, disponibles });
 }));
 
 // Eliminar una sede. Es un borrado logico (activo = 0), nunca se borran sus

@@ -101,7 +101,8 @@ CREATE TABLE IF NOT EXISTS registros (
   hora_salida TEXT,
   valor_parqueo REAL,
   recargo_notificacion REAL NOT NULL DEFAULT 0,
-  metodo_notificacion TEXT, -- whatsapp | telegram | sms | impresion | link | ninguno
+  metodo_notificacion_entrada TEXT, -- whatsapp | telegram | sms | impresion | ninguno/NULL: como se le entrego el ticket al entrar
+  metodo_notificacion_salida TEXT, -- whatsapp | telegram | sms | impresion | ninguno: como se le notifico el valor a pagar al salir
   estado TEXT NOT NULL DEFAULT 'activo', -- activo | cerrado
   sincronizado INTEGER NOT NULL DEFAULT 1 -- usado por el cliente offline, ver mobile/offlineQueue.js
 );
@@ -140,6 +141,18 @@ if (!columnas.some((c) => c.name === "activo")) {
 if (!columnas.some((c) => c.name === "monto_multa_perdida_ticket")) {
   db.exec("ALTER TABLE parqueaderos ADD COLUMN monto_multa_perdida_ticket REAL NOT NULL DEFAULT 0;");
 }
+// El campo "metodo_notificacion" original solo guardaba el metodo de la
+// SALIDA (y encima nunca se llenaba el de la entrada). Se separa en dos
+// columnas para poder ver con que metodo se entrego el ticket al entrar y
+// con cual se notifico el valor a pagar al salir, cada uno por su lado.
+const columnasRegistros = db.prepare("PRAGMA table_info(registros)").all();
+if (columnasRegistros.some((c) => c.name === "metodo_notificacion") && !columnasRegistros.some((c) => c.name === "metodo_notificacion_salida")) {
+  db.exec("ALTER TABLE registros RENAME COLUMN metodo_notificacion TO metodo_notificacion_salida;");
+}
+if (!db.prepare("PRAGMA table_info(registros)").all().some((c) => c.name === "metodo_notificacion_entrada")) {
+  db.exec("ALTER TABLE registros ADD COLUMN metodo_notificacion_entrada TEXT;");
+}
+
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_parqueaderos_codigo ON parqueaderos(codigo);");
 // Unico entre las sedes ACTIVAS de un negocio: al "eliminar" (desactivar)
 // una sede, su nombre queda libre para reutilizarse.

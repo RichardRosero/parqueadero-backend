@@ -71,7 +71,7 @@ router.post("/", requiereRol("admin", "guardia"), asyncHandler(async (req, res) 
 
     db.prepare(`
       UPDATE registros
-      SET hora_salida = ?, valor_parqueo = ?, recargo_notificacion = 0, metodo_notificacion = 'ninguno', guardia_salida_id = ?, estado = 'cerrado'
+      SET hora_salida = ?, valor_parqueo = ?, recargo_notificacion = 0, metodo_notificacion_salida = 'ninguno', guardia_salida_id = ?, estado = 'cerrado'
       WHERE id = ?
     `).run(new Date().toISOString(), valorCobrado, req.usuario.id, registro.id);
   }

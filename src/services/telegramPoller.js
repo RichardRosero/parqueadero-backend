@@ -30,22 +30,45 @@ async function revisarMensajes() {
       const chatId = mensaje.chat.id;
       if (!codigo) continue;
 
-      const registro = db.prepare("SELECT * FROM registros WHERE codigo = ? AND estado = 'activo'").get(codigo);
+      // El codigo es el mismo en la entrada y en la salida de un mismo
+      // registro (no cambia al cerrarlo), asi que se busca sin filtrar por
+      // estado: si el cliente escanea el QR de "Recibir ticket" al entrar,
+      // el registro todavia esta activo; si escanea el QR que se le muestra
+      // al salir, ya esta cerrado y con hora_salida — eso decide que mensaje
+      // mandarle. Se toma el mas reciente por si el codigo se repitiera.
+      const registro = db.prepare("SELECT * FROM registros WHERE codigo = ? ORDER BY hora_entrada DESC LIMIT 1").get(codigo);
       if (!registro) {
-        await enviarMensaje(chatId, "No encontramos un ticket activo con ese código. Consulta en el parqueadero.");
+        await enviarMensaje(chatId, "No encontramos un ticket con ese código. Consulta en el parqueadero.");
         continue;
       }
 
       const parqueadero = db.prepare("SELECT nombre FROM parqueaderos WHERE id = ?").get(registro.parqueadero_id);
-      const textoTicket = [
-        `🎫 ${parqueadero?.nombre || "Parqueadero"}`,
-        `Placa: ${registro.placa}`,
-        `Código: ${registro.codigo}`,
-        `Entrada: ${new Date(registro.hora_entrada).toLocaleString()}`,
-        "",
-        "Guarda este código, lo vas a necesitar para retirar tu vehículo.",
-      ].join("\n");
-      await enviarMensaje(chatId, textoTicket);
+      const nombreSede = parqueadero?.nombre || "Parqueadero";
+
+      if (registro.estado === "activo") {
+        const textoTicket = [
+          `🎫 ${nombreSede}`,
+          `Placa: ${registro.placa}`,
+          `Código: ${registro.codigo}`,
+          `Entrada: ${new Date(registro.hora_entrada).toLocaleString()}`,
+          "",
+          "Guarda este código, lo vas a necesitar para retirar tu vehículo.",
+        ].join("\n");
+        await enviarMensaje(chatId, textoTicket);
+      } else if (registro.hora_salida) {
+        const minutos = Math.round((new Date(registro.hora_salida) - new Date(registro.hora_entrada)) / 60000);
+        const horas = Math.floor(minutos / 60);
+        const mins = minutos % 60;
+        const textoSalida = [
+          `🚗 ${nombreSede} — Salida registrada`,
+          `Placa: ${registro.placa}`,
+          `Entrada: ${new Date(registro.hora_entrada).toLocaleString()}`,
+          `Salida: ${new Date(registro.hora_salida).toLocaleString()}`,
+          `Tiempo total: ${horas}h ${mins}min`,
+          `Valor a pagar: $${registro.valor_parqueo}`,
+        ].join("\n");
+        await enviarMensaje(chatId, textoSalida);
+      }
     }
   } catch (err) {
     console.error("[Telegram] Error revisando mensajes:", err.message);

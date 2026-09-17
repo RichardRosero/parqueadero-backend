@@ -35,9 +35,9 @@ router.post("/entrada", asyncHandler(async (req, res) => {
   const horaEntrada = new Date().toISOString();
 
   db.prepare(`
-    INSERT INTO registros (id, parqueadero_id, placa, tipo_vehiculo_id, guardia_entrada_id, codigo, hora_entrada, estado)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'activo')
-  `).run(id, parqueadero_id, placa.toUpperCase(), tipo_vehiculo_id || null, req.usuario.id, codigo, horaEntrada);
+    INSERT INTO registros (id, parqueadero_id, placa, tipo_vehiculo_id, guardia_entrada_id, codigo, hora_entrada, estado, metodo_notificacion_entrada)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'activo', ?)
+  `).run(id, parqueadero_id, placa.toUpperCase(), tipo_vehiculo_id || null, req.usuario.id, codigo, horaEntrada, metodo_notificacion || null);
 
   const qrDataUrl = await generarQrDataUrl({ registroId: id, codigo });
 
@@ -93,16 +93,26 @@ router.post("/salida/calcular", asyncHandler(async (req, res) => {
   const { parqueadero_id, placa, codigo, decision_guardia } = req.body;
   const { registro, parqueadero, tipoVehiculo, vehiculo } = buscarRegistroActivoValidado(parqueadero_id, placa, codigo);
 
+  const horaEntrada = new Date(registro.hora_entrada);
+  const horaSalida = new Date();
   const { valor, detalle } = calcularValorAPagar({
-    horaEntrada: new Date(registro.hora_entrada),
-    horaSalida: new Date(),
+    horaEntrada,
+    horaSalida,
     tipoVehiculo,
     vehiculo,
     toleranciaHoras: parqueadero.tolerancia_vencimiento_horas,
     decisionGuardia: decision_guardia, // 'vencimiento' | 'tolerancia', solo aplica si vencio a mitad de estadia
   });
 
-  res.json({ valor, detalle, recargo: 0, total: round2(valor) });
+  res.json({
+    valor,
+    detalle,
+    recargo: 0,
+    total: round2(valor),
+    horaEntrada: horaEntrada.toISOString(),
+    horaSalida: horaSalida.toISOString(),
+    minutosTotales: Math.round((horaSalida - horaEntrada) / 60000),
+  });
 }));
 
 // --- Confirmar la salida (boton "Salir") ---
@@ -113,9 +123,10 @@ router.post("/salida/confirmar", asyncHandler(async (req, res) => {
   const { parqueadero_id, placa, codigo, decision_guardia, metodo_notificacion_ticket, destino_notificacion } = req.body;
   const { registro, parqueadero, tipoVehiculo, vehiculo } = buscarRegistroActivoValidado(parqueadero_id, placa, codigo);
 
+  const horaEntrada = new Date(registro.hora_entrada);
   const horaSalida = new Date();
   const { valor, detalle } = calcularValorAPagar({
-    horaEntrada: new Date(registro.hora_entrada),
+    horaEntrada,
     horaSalida,
     tipoVehiculo,
     vehiculo,
@@ -133,15 +144,31 @@ router.post("/salida/confirmar", asyncHandler(async (req, res) => {
       { montoRecargoWhatsapp: parqueadero.monto_recargo_whatsapp, montoRecargoSms: parqueadero.monto_recargo_sms }
     );
     recargo = notificacion.recargo;
+    // Igual que en /entrada: el bot de Telegram no puede escribirle primero
+    // al cliente, asi que se muestra un QR para que lo escanee y el mensaje
+    // de salida (tiempo/valor) se lo manda telegramPoller.js cuando llegue
+    // ese /start (ver ahi como decide si es ticket de entrada o de salida).
+    if (notificacion.linkTelegram) {
+      notificacion.qrTelegram = await generarQrDataUrlTexto(notificacion.linkTelegram);
+    }
   }
 
   db.prepare(`
     UPDATE registros
-    SET hora_salida = ?, valor_parqueo = ?, recargo_notificacion = ?, metodo_notificacion = ?, guardia_salida_id = ?, estado = 'cerrado'
+    SET hora_salida = ?, valor_parqueo = ?, recargo_notificacion = ?, metodo_notificacion_salida = ?, guardia_salida_id = ?, estado = 'cerrado'
     WHERE id = ?
   `).run(horaSalida.toISOString(), valor, recargo, metodo_notificacion_ticket || null, req.usuario.id, registro.id);
 
-  res.json({ valor, detalle, recargo, total: round2(valor + recargo) });
+  res.json({
+    valor,
+    detalle,
+    recargo,
+    total: round2(valor + recargo),
+    horaEntrada: horaEntrada.toISOString(),
+    horaSalida: horaSalida.toISOString(),
+    minutosTotales: Math.round((horaSalida - horaEntrada) / 60000),
+    notificacion,
+  });
 }));
 
 function round2(n) {
